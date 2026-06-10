@@ -2,6 +2,11 @@ import cv2
 import numpy as np
 import os
 import re	
+import sys
+
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_DIR not in sys.path:
+    sys.path.insert(0, PROJECT_DIR)
 
 from src.helper_functions import resize_video
 
@@ -79,16 +84,21 @@ def detect_face_ssd(network, orig_frame, show_conf=True, conf_min=0.7):
 
 if detector == "ssd":
     # For Face Detection with SSD (OpenCV's DNN) -> load weights from caffemodel
-    network = cv2.dnn.readNetFromCaffe("deploy.prototxt.txt", "res10_300x300_ssd_iter_140000.caffemodel")
+    network = cv2.dnn.readNetFromCaffe(
+        os.path.join(PROJECT_DIR, "deploy.prototxt.txt"),
+        os.path.join(PROJECT_DIR, "res10_300x300_ssd_iter_140000.caffemodel"),
+    )
 else:
     # For Face Detection with HAAR CASCADE -> import haar cascade for face detection
-    face_detector = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
+    face_detector = cv2.CascadeClassifier(os.path.join(PROJECT_DIR, 'haarcascade_frontalface_default.xml'))
 
 # video capture object
 cam = cv2.VideoCapture(0)
 
 folder_faces = "dataset/"      # where the cropped faces will be stored
 folder_full = "dataset_full/"  # where will be stored the full photos
+folder_faces = os.path.join(PROJECT_DIR, folder_faces)
+folder_full = os.path.join(PROJECT_DIR, folder_full)
 
 # The user need to type his name, so the faces will be saved in the proper subfolder
 # we could ask to type a number ID too (that his face will be associated with)

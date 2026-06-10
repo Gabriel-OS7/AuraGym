@@ -4,8 +4,8 @@ import os
 from PIL import Image
 import pickle
 
-
-training_path = 'dataset/'
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+training_path = os.path.join(PROJECT_DIR, 'dataset')
 
 def get_image_data(path_train):
   subdirs = [os.path.join(path_train, f) for f in os.listdir(path_train)]
@@ -47,7 +47,7 @@ for n in face_names:
   print(str(n) + " => ID " + str(face_names[n]))
 
 # store names and ids in a pickle file
-with open("face_names.pickle", "wb") as f:
+with open(os.path.join(PROJECT_DIR, "face_names.pickle"), "wb") as f:
   pickle.dump(face_names, f)
 
 
@@ -55,7 +55,7 @@ print('\n')
 print('Training Eigenface recognizer......')
 eigen_classifier = cv2.face.EigenFaceRecognizer_create()
 eigen_classifier.train(faces, ids)
-eigen_classifier.write('eigen_classifier.yml')
+eigen_classifier.write(os.path.join(PROJECT_DIR, 'eigen_classifier.yml'))
 print('... Completed!\n')
 
 
@@ -63,11 +63,11 @@ print('... Completed!\n')
 print('Training LBPH recognizer......')
 lbph_classifier = cv2.face.LBPHFaceRecognizer_create()
 lbph_classifier.train(faces, ids)
-lbph_classifier.write('lbph_classifier.yml')
+lbph_classifier.write(os.path.join(PROJECT_DIR, 'lbph_classifier.yml'))
 print('... Completed!\n')
 
 print('Training Fisherface recognizer......')
 fisher_classifier = cv2.face.FisherFaceRecognizer_create()
 fisher_classifier.train(faces, ids)
-fisher_classifier.write('fisher_classifier.yml')
+fisher_classifier.write(os.path.join(PROJECT_DIR, 'fisher_classifier.yml'))
 print('... Completed!\n')

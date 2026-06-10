@@ -1,16 +1,22 @@
 import os
 import pickle
+import sys
+
+PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_DIR not in sys.path:
+    sys.path.insert(0, PROJECT_DIR)
 
 import cv2
 import customtkinter as ctk
 from PIL import Image, ImageTk
+
+from src.firebase_service import FirebaseService
 
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 
-PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CASCADE_PATH = os.path.join(PROJECT_DIR, "haarcascade_frontalface_default.xml")
 MODEL_PATH = os.path.join(PROJECT_DIR, "lbph_classifier.yml")
 PEOPLE_PATH = os.path.join(PROJECT_DIR, "face_names.pickle")
@@ -37,6 +43,8 @@ class GymAuthenticatorApp(ctk.CTk):
         self.camera = None
         self.running = False
         self.frame_photo = None
+        self.last_authenticated_member = None
+        self.firebase_service = FirebaseService(PROJECT_DIR)
 
         self.face_detector = cv2.CascadeClassifier(CASCADE_PATH)
         self.recognizer = self._load_recognizer()
@@ -172,6 +180,16 @@ class GymAuthenticatorApp(ctk.CTk):
         self.log_box.see("end")
         self.log_box.configure(state="disabled")
 
+    def _record_access_event(self, member_name, confidence, granted, member_id=None):
+        if not self.firebase_service.is_ready:
+            return
+
+        success = self.firebase_service.record_access_event(member_name, confidence, granted, member_id=member_id)
+        if success:
+            self._append_log(f"Firebase updated for {member_name}.")
+        else:
+            self._append_log("Firebase database update skipped or failed.")
+
     def reload_models(self):
         self.recognizer = self._load_recognizer()
         self.people_mapping = load_people_mapping(PEOPLE_PATH)
@@ -272,12 +290,16 @@ class GymAuthenticatorApp(ctk.CTk):
             self.name_value.configure(text="Member: -")
             self.confidence_value.configure(text="Confidence: -")
             self._set_status("Waiting for face", "#203040")
+            self.last_authenticated_member = None
         else:
             self.name_value.configure(text=f"Member: {recognized_name}")
             if confidence_value is not None:
                 self.confidence_value.configure(text=f"Confidence: {confidence_value:.1f}")
-                if confidence_value <= CONFIDENCE_THRESHOLD:
+                access_granted = confidence_value <= CONFIDENCE_THRESHOLD
+                if access_granted and self.last_authenticated_member != recognized_name:
                     self._append_log(f"{recognized_name} authenticated with confidence {confidence_value:.1f}.")
+                    self._record_access_event(recognized_name, confidence_value, True, member_id=label_id)
+                    self.last_authenticated_member = recognized_name
             else:
                 self.confidence_value.configure(text="Confidence: -")
 
