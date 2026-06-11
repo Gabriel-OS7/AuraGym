@@ -6,6 +6,14 @@ try:
 except ImportError:  # pragma: no cover - handled gracefully at runtime
     pyrebase = None
 
+try:
+    import firebase_admin
+    from firebase_admin import credentials, firestore
+except ImportError:  # pragma: no cover - handled gracefully at runtime
+    firebase_admin = None
+    credentials = None
+    firestore = None
+
 
 def _load_env_file(env_path):
     if not os.path.exists(env_path):
@@ -44,13 +52,43 @@ class FirebaseService:
         self.project_dir = project_dir
         self._firebase = None
         self._db = None
+        self._firestore = None
         self._auth_token = None
         self.is_ready = False
 
         _load_env_file(os.path.join(project_dir, ".env"))
+        self._access_log_collection = os.getenv("FIREBASE_ACCESS_LOG_COLLECTION", "access_logs")
         self._initialize()
 
     def _initialize(self):
+        self._initialize_firestore()
+        self._initialize_realtime_db()
+        self.is_ready = self._firestore is not None or self._db is not None
+
+    def _initialize_firestore(self):
+        if firebase_admin is None or credentials is None or firestore is None:
+            return
+
+        service_account_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH", "").strip()
+        if not service_account_path:
+            service_account_path = os.path.join(self.project_dir, "serviceAccountKey.json")
+        elif not os.path.isabs(service_account_path):
+            service_account_path = os.path.join(self.project_dir, service_account_path)
+
+        if not os.path.exists(service_account_path):
+            return
+
+        try:
+            try:
+                app = firebase_admin.get_app()
+            except ValueError:
+                app = firebase_admin.initialize_app(credentials.Certificate(service_account_path))
+
+            self._firestore = firestore.client(app)
+        except Exception:
+            self._firestore = None
+
+    def _initialize_realtime_db(self):
         if pyrebase is None:
             return
 
@@ -72,7 +110,6 @@ class FirebaseService:
         self._firebase = pyrebase.initialize_app(config)
         self._db = self._firebase.database()
         self._authenticate_if_possible()
-        self.is_ready = True
 
     def _authenticate_if_possible(self):
         email = os.getenv("FIREBASE_AUTH_EMAIL", "")
@@ -87,31 +124,59 @@ class FirebaseService:
         except Exception:
             self._auth_token = None
 
+    def _record_access_event_firestore(self, event_payload):
+        if self._firestore is None:
+            return False
+
+        try:
+            payload = dict(event_payload)
+            payload["event_time"] = firestore.SERVER_TIMESTAMP
+            self._firestore.collection(self._access_log_collection).add(payload)
+            return True
+        except Exception:
+            return False
+
+    def _record_access_event_realtime_db(self, event_payload, member_payload):
+        if self._db is None:
+            return False
+
+        try:
+            self._db.child(_database_path("access_logs")).push(event_payload, self._auth_token)
+            if member_payload is not None:
+                member_key = _slugify(member_payload["name"])
+                self._db.child(_database_path("members", member_key)).set(member_payload, self._auth_token)
+            return True
+        except Exception:
+            return False
+
     def record_access_event(self, member_name, confidence, granted, member_id=None):
         if not self.is_ready:
             return False
 
+        timestamp = datetime.now(timezone.utc)
         event_payload = {
             "member_name": member_name,
             "member_id": member_id,
             "confidence": confidence,
             "granted": granted,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": timestamp.isoformat(),
             "source": "AuraGym",
         }
 
-        member_key = _slugify(member_name)
         member_payload = {
             "name": member_name,
             "member_id": member_id,
             "last_confidence": confidence,
             "last_granted": granted,
-            "last_seen": event_payload["timestamp"],
+            "last_seen": timestamp.isoformat(),
         }
 
-        try:
-            self._db.child(_database_path("access_logs")).push(event_payload, self._auth_token)
-            self._db.child(_database_path("members", member_key)).set(member_payload, self._auth_token)
+        firestore_recorded = self._record_access_event_firestore(event_payload)
+
+        if firestore_recorded:
             return True
-        except Exception:
-            return False
+
+        if self._db is not None:
+            return self._record_access_event_realtime_db(event_payload, member_payload)
+
+        return False

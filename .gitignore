@@ -2,6 +2,8 @@
 /__pycache__
 /dataset
 /dataset_full
+**/__pycache__/
+*.pyc
 /venv
 .env
 .env.local
