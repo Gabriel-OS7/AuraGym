@@ -7,3 +7,4 @@
 /venv
 .env
 .env.local
+service_account.json

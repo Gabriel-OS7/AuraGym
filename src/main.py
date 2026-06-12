@@ -1,6 +1,9 @@
 import os
 import pickle
+import subprocess
 import sys
+import time
+import warnings
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_DIR not in sys.path:
@@ -9,8 +12,11 @@ if PROJECT_DIR not in sys.path:
 import cv2
 import customtkinter as ctk
 from PIL import Image, ImageTk
+from tkinter import simpledialog
 
 from src.firebase_service import FirebaseService
+
+warnings.filterwarnings("ignore", message=".*Given image is not CTkImage.*")
 
 
 ctk.set_appearance_mode("dark")
@@ -21,7 +27,8 @@ CASCADE_PATH = os.path.join(PROJECT_DIR, "haarcascade_frontalface_default.xml")
 MODEL_PATH = os.path.join(PROJECT_DIR, "lbph_classifier.yml")
 PEOPLE_PATH = os.path.join(PROJECT_DIR, "face_names.pickle")
 CAMERA_INDEX = 0
-CONFIDENCE_THRESHOLD = 65.0
+CONFIDENCE_THRESHOLD = 85.0
+ACCESS_LOG_COOLDOWN_SECONDS = 5.0
 
 
 def load_people_mapping(path):
@@ -37,13 +44,15 @@ class GymAuthenticatorApp(ctk.CTk):
         super().__init__()
 
         self.title("AuraGym Access Control")
-        self.geometry("1100x700")
+        self.geometry("1125x700")
         self.minsize(980, 640)
 
         self.camera = None
         self.running = False
         self.frame_photo = None
+        self._current_image = None
         self.last_authenticated_member = None
+        self.last_access_log_at = 0.0
         self.firebase_service = FirebaseService(PROJECT_DIR)
 
         self.face_detector = cv2.CascadeClassifier(CASCADE_PATH)
@@ -164,6 +173,15 @@ class GymAuthenticatorApp(ctk.CTk):
         )
         self.refresh_button.grid(row=7, column=0, padx=20, pady=(0, 20), sticky="ew")
 
+        self.add_member_button = ctk.CTkButton(
+            self.controls_frame,
+            text="Add Member",
+            command=self.add_member,
+            fg_color="#0F766E",
+            hover_color="#115E59",
+        )
+        self.add_member_button.grid(row=8, column=0, padx=20, pady=(0, 20), sticky="ew")
+
         self._update_model_state_message()
 
     def _update_model_state_message(self):
@@ -197,6 +215,45 @@ class GymAuthenticatorApp(ctk.CTk):
         self._append_log("Models reloaded.")
         self._update_model_state_message()
 
+    def add_member(self):
+        if self.running:
+            self.stop_camera()
+
+        member_name = simpledialog.askstring("Add Member", "Enter the member RA/name:", parent=self)
+        if not member_name:
+            self._append_log("Add member cancelled.")
+            return
+
+        capture_script = os.path.join(PROJECT_DIR, "src", "captura_foto.py")
+        train_script = os.path.join(PROJECT_DIR, "src", "train_recognizers.py")
+        python_executable = sys.executable
+
+        try:
+            self._append_log(f"Capturing photos for {member_name}...")
+            capture_result = subprocess.run(
+                [python_executable, capture_script, "--name", member_name],
+                cwd=PROJECT_DIR,
+                check=False,
+            )
+            if capture_result.returncode != 0:
+                self._append_log("Photo capture did not complete successfully.")
+                return
+
+            self._append_log("Training recognizers...")
+            train_result = subprocess.run(
+                [python_executable, train_script],
+                cwd=PROJECT_DIR,
+                check=False,
+            )
+            if train_result.returncode != 0:
+                self._append_log("Training failed.")
+                return
+
+            self.reload_models()
+            self._append_log(f"Member {member_name} added successfully.")
+        except Exception as error:
+            self._append_log(f"Failed to add member: {error}")
+
     def start_camera(self):
         if self.running:
             return
@@ -222,11 +279,13 @@ class GymAuthenticatorApp(ctk.CTk):
             self.camera.release()
             self.camera = None
 
+        self._current_image = None
+        self.frame_photo = None
+        self.preview_label.image = None
         self.start_button.configure(state="normal")
         self.stop_button.configure(state="disabled")
         self.camera_value.configure(text="Camera: stopped")
         self.preview_label.configure(image=None, text="Camera stopped")
-        self.preview_label.image = None
         self._set_status("Camera stopped", "#203040")
         self._append_log("Camera stopped.")
 
@@ -268,9 +327,9 @@ class GymAuthenticatorApp(ctk.CTk):
                 label_id, confidence = self.recognizer.predict(face_gray)
                 confidence_value = confidence
                 recognized_name = self.id_to_name.get(label_id, f"ID {label_id}")
-                color = (40, 180, 99) if confidence <= CONFIDENCE_THRESHOLD else (220, 80, 80)
-                status_text = "Access granted" if confidence <= CONFIDENCE_THRESHOLD else "Access denied"
-                self._set_status(status_text, "#14532D" if confidence <= CONFIDENCE_THRESHOLD else "#991B1B")
+                color = (40, 180, 99) if CONFIDENCE_THRESHOLD <= confidence <= 105 else (220, 80, 80)
+                status_text = "Access granted" if CONFIDENCE_THRESHOLD <= confidence <= 105 else "Access denied"
+                self._set_status(status_text, "#14532D" if CONFIDENCE_THRESHOLD <= confidence <= 105 else "#991B1B")
                 cv2.putText(
                     display_frame,
                     f"{recognized_name} | {confidence:.1f}",
@@ -295,18 +354,21 @@ class GymAuthenticatorApp(ctk.CTk):
             self.name_value.configure(text=f"Member: {recognized_name}")
             if confidence_value is not None:
                 self.confidence_value.configure(text=f"Confidence: {confidence_value:.1f}")
-                access_granted = confidence_value <= CONFIDENCE_THRESHOLD
-                if access_granted and self.last_authenticated_member != recognized_name:
+                access_granted = CONFIDENCE_THRESHOLD <= confidence_value <= 105
+                now = time.monotonic()
+                cooldown_active = now - self.last_access_log_at < ACCESS_LOG_COOLDOWN_SECONDS
+                if access_granted and not cooldown_active:
                     self._append_log(f"{recognized_name} authenticated with confidence {confidence_value:.1f}.")
                     self._record_access_event(recognized_name, confidence_value, True, member_id=label_id)
                     self.last_authenticated_member = recognized_name
+                    self.last_access_log_at = now
             else:
                 self.confidence_value.configure(text="Confidence: -")
 
         rgb_frame = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
-        image = Image.fromarray(rgb_frame)
-        image.thumbnail((720, 540))
-        self.frame_photo = ImageTk.PhotoImage(image)
+        self._current_image = Image.fromarray(rgb_frame)
+        self._current_image.thumbnail((720, 540))
+        self.frame_photo = ImageTk.PhotoImage(self._current_image)
         self.preview_label.configure(image=self.frame_photo, text="")
         self.preview_label.image = self.frame_photo
 

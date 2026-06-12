@@ -3,6 +3,7 @@ import numpy as np
 import os
 import re	
 import sys
+import argparse
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_DIR not in sys.path:
@@ -103,7 +104,11 @@ folder_full = os.path.join(PROJECT_DIR, folder_full)
 # The user need to type his name, so the faces will be saved in the proper subfolder
 # we could ask to type a number ID too (that his face will be associated with)
 ## REMEMBER: no language accents, just letters (from a to z) or numbers
-person_name = input('Digite o seu ra: ')
+parser = argparse.ArgumentParser(description='Capture face photos for a member.')
+parser.add_argument('--name', help='Member name or id used to create the dataset folder')
+args = parser.parse_args()
+
+person_name = args.name or input('Digite o seu ra: ')
 person_name = parse_name(person_name)
 
 # Join the path (dataset directory + subfolder)

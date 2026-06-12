@@ -38,6 +38,10 @@ def get_image_data(path_train):
 
 ids, faces, face_names = get_image_data(training_path)
 
+if len(faces) == 0:
+  print('No faces found in dataset. Training skipped.')
+  raise SystemExit(0)
+
 print(ids)
 print(len(faces))
 
